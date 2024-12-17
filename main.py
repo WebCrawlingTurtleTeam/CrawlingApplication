@@ -144,7 +144,7 @@ async def root():
         return result
     else:  # DB에서 온게 있으면?
 
-        if movies[0][1] >= datetime.now()-timedelta(hours=3):
+        if movies[0][1] >= datetime.now()-timedelta(hours=12):
             # 3시간 안 지남
             return [movie[0] for movie in movies if movie and movie[0].strip()]
         else:
