@@ -10,6 +10,7 @@ import time
 from selenium.common.exceptions import TimeoutException
 from query import CRUD
 from datetime import datetime, timedelta
+from openai import OpenAI
 
 
 # 크롬 드라이버 자동 설치 및 설정
@@ -47,6 +48,37 @@ async def bring_movie_name():
     driver.quit()
 
     return movie_names
+
+
+async def bring_naver_review(movie_name: str):
+    driver = webdriver.Chrome(service=service)
+    url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query=" + movie_name + "+관람평"
+    driver.get(url)
+
+    try:
+        r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located(
+            (By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[4]/div[4]/ul/li')))
+    except Exception as e:
+        r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located(
+            (By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[3]/div[4]/ul/li')))
+        print(f"페이지 로딩 또는 크롤링 실패: {e.__class__.__name__}")
+    # 데이터 크롤링
+    try:
+        reviews = r
+        review_list = []
+        for review in reviews:
+            try:
+                r = review.find_element(By.CLASS_NAME, "_text")
+                review_list.append(r.text)
+            except Exception as e:
+                print(f"리뷰 처리 중 오류 발생: {e}")
+    except Exception as e:
+        print(f"페이지 로딩 또는 크롤링 실패: {e}")
+
+    finally:
+        driver.quit()
+
+    return review_list
 
 
 async def bring_review(movie_names):
@@ -100,7 +132,6 @@ async def bring_review(movie_names):
             print(f'오류 발생: {e.__class__.__name__}')
 
     driver.quit()
-
     return all_reviews
 
 
@@ -112,7 +143,7 @@ async def root():
         query.insert_movie(result)  # 그리고 인서트
         return result
     else:  # DB에서 온게 있으면?
-        # 온거 시간이 3시간 전 보다 오래됐으면?
+
         if movies[0][1] >= datetime.now()-timedelta(hours=3):
             # 3시간 안 지남
             return [movie[0] for movie in movies if movie and movie[0].strip()]
@@ -123,16 +154,61 @@ async def root():
             return result
 
 
-@app.get("/review/{movie_names}")
-async def get_review(movie_names: str):
-    movies = query.get_movies()
-    print(movies)
-    return await bring_review(movie_names)
+@app.get("/review-watcha")
+async def get_review(name: str):
+    # name으로 movie에서 movie테이블의 movie_name이 name인 movie_code와
+    # review 테이블의 movie_code가 일치하는게 있는지 찾는다.
+    reviews = query.get_review(name, 'watcha')
+    if reviews:
+        #3 시간 확인
+        if reviews[0][1] >= datetime.now() - timedelta(hours=3):
+            # 안 지났으면?
+            return [review[0] for review in reviews]
+        else:
+            # 지났으면?
+            result = await bring_review([name])
+            query.insert_review(result[name], name, 'watcha')
+            return result[name]
+    else:
+        #아예 처음
+        result = await bring_review([name])
+        query.insert_review(result[name], name, 'watcha')
+        return result[name]
 
 
-@app.get("/test")
-async def test():
-    pass
+@app.get("/review-naver")
+async def get_naver_review(name: str):
+    reviews = query.get_review(name, 'naver')
+    if reviews:
+        if reviews[0][1] >= datetime.now() - timedelta(hours=3):
+            return [review[0] for review in reviews]
+        else:
+            result = await bring_naver_review(name)
+            query.insert_review(result, name, 'naver')
+            return result
+    else:
+        result = await bring_naver_review(name)
+        query.insert_review(result, name, 'naver')
+        return result
+
+
+@app.get("/asktogpt")
+async def getGptReview():
+    global review_list
+    client = OpenAI(api_key="")
+
+    sliceReviews = ", ".join(review_list[:5])
+    completion = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "system", "content": "You are a movie expert."},
+            {
+                "role": "user",
+                "content": f"해당 영화 리뷰들을 분석하고 요약을 3줄 이내로 작성해줘. {sliceReviews}"
+            }
+        ]
+    )
+    return completion.choices[0].message.content
 
 
 if __name__ == "__main__":
