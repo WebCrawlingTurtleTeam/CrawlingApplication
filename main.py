@@ -11,6 +11,7 @@ from selenium.common.exceptions import TimeoutException
 from query import CRUD
 from datetime import datetime, timedelta
 from openai import OpenAI
+from selenium.webdriver import Keys
 
 
 # 크롬 드라이버 자동 설치 및 설정
@@ -191,24 +192,71 @@ async def get_naver_review(name: str):
         query.insert_review(result, name, 'naver')
         return result
 
+@app.get("/main/{movie_name}")
+async def root(movie_name: str):
+    def get_movie():
+        try:
+            r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located((By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[4]/div[4]/ul/li')))
+            return r
+        except Exception as e:
+            r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located((By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[3]/div[4]/ul/li')))
+            print(f"페이지 로딩 또는 크롤링 실패: {e.__class__.__name__}")
+            return r
+    
+    driver = webdriver.Chrome(service=service)
+    url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query="+movie_name+"+관람평"
+    driver.get(url)
 
-@app.get("/asktogpt")
-async def getGptReview():
-    global review_list
-    client = OpenAI(api_key="")
+    # 데이터 크롤링
+    try:
+        reviews = get_movie()
+        review_list =[]
+        for review in reviews:
+            try:
+                r = review.find_element(By.CLASS_NAME, "_text")
+                review_list.append(r.text)
+                print("-" * 40)
+            except Exception as e:
+                print(f"리뷰 처리 중 오류 발생: {e}")
+    except Exception as e:
+        print(f"페이지 로딩 또는 크롤링 실패: {e}")
 
-    sliceReviews = ", ".join(review_list[:5])
-    completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a movie expert."},
-            {
-                "role": "user",
-                "content": f"해당 영화 리뷰들을 분석하고 요약을 3줄 이내로 작성해줘. {sliceReviews}"
-            }
-        ]
+    finally:
+        driver.quit()
+
+    return review_list
+
+@app.get("/watcha/{movie_name}")
+async def getWatchaReview(movie_name: str):
+    driver = webdriver.Chrome(service=service)
+    url = "https://pedia.watcha.com/ko-KR"
+    driver.get(url)
+    review_list = []
+
+    e = driver.find_element(By.XPATH, '//*[@id="desktop-search-field"]')
+    e.send_keys(movie_name)
+    e.send_keys(Keys.RETURN)
+
+    WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH,'//*[@id="root"]/div[1]/section/section/div[2]/div[1]/section/section[2]/div[1]/ul/li[1]/a/div[1]/div[1]/img'))
     )
-    return completion.choices[0].message.content
+    a = driver.find_elements(By.XPATH, '//*[@id="root"]/div[1]/section/section/div[2]/div[1]/section/section[2]/div[1]/ul/li[1]/a/div[1]/div[1]/img')
+    a[0].click()
+
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '//*[@id="root"]/div[1]/section/div/div[2]/section/section[2]/ul/li[1]'))
+    )
+    driver.find_element(By.XPATH,'//*[@id="root"]/div[1]/section/div/div[2]/section/section[2]/header/div/div/a').click()
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, '.B79Ex5Ar'))
+    )
+
+    b = driver.find_elements(By.CSS_SELECTOR, '.B79Ex5Ar')
+
+    for i in b:
+        print(i.text)
+        review_list.append(i.text)
+    return review_list
 
 
 if __name__ == "__main__":
