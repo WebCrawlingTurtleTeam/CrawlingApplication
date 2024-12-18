@@ -15,6 +15,7 @@ class CRUD:
         with self.conn.cursor() as cursor:
             query = "DELETE FROM movies"
             cursor.execute(query)
+            self.conn.commit()
             for movie in movies:
                 query = "INSERT INTO movies (movie_name, update_at) VALUES (%s, NOW())"
                 cursor.execute(query, (movie,))
@@ -30,15 +31,18 @@ class CRUD:
 
     def insert_review(self, reviews, movie_name, platform):
         with self.conn.cursor() as cursor:
-            query = "DELETE FROM reviews WHERE platform = %s"
-            cursor.execute(query, (platform,))
-
             query = "SELECT movie_code FROM movies WHERE movie_name = %s"
             cursor.execute(query, (movie_name,))
             movie_code = cursor.fetchall()[0][0]
+            query = "DELETE FROM reviews  WHERE platform = %s AND movie_code = (SELECT movie_code FROM movies WHERE movie_name = %s)"
+            cursor.execute(query, (platform, movie_name, ))
+            self.conn.commit()
             for review in reviews:
-                query = "INSERT INTO reviews (movie_code, review_content,review_update_at,platform) VALUES (%s, %s, NOW(),%s)"
-                cursor.execute(query, (movie_code, review, platform,))
+                try:
+                    query = "INSERT INTO reviews (movie_code, review_content,review_update_at,platform) VALUES (%s, %s, NOW(),%s)"
+                    cursor.execute(query, (movie_code, review, platform,))
+                except:
+                    pass
             self.conn.commit()
     def close_connection(self):
         self.conn.close()

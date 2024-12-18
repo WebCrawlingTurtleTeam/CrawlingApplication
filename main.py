@@ -10,8 +10,7 @@ import time
 from selenium.common.exceptions import TimeoutException
 from query import CRUD
 from datetime import datetime, timedelta
-from openai import OpenAI
-
+from selenium.webdriver import Keys
 
 # 크롬 드라이버 자동 설치 및 설정
 service = Service(ChromeDriverManager().install())
@@ -40,7 +39,7 @@ async def bring_movie_name():
     for _ in range(scroll_limit):
         driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
         time.sleep(1)
-    movie_elements = WebDriverWait(driver,5).until(
+    movie_elements = WebDriverWait(driver, 5).until(
         EC.presence_of_all_elements_located((By.CLASS_NAME, "ZADAQaiR"))
     )
     # 영화 제목 가져오기
@@ -138,20 +137,21 @@ async def bring_review(movie_names):
 @app.get("/")
 async def root():
     movies = query.get_movies()  # 무비들 DB에서 가져옴 투플
+    print(movies)
     if len(movies) == 0:  # 가져온 무비들이 없으면?
         result = await bring_movie_name()  # 크롤링 하기
         query.insert_movie(result)  # 그리고 인서트
         return result
     else:  # DB에서 온게 있으면?
 
-        if movies[0][1] >= datetime.now()-timedelta(hours=12):
-            # 3시간 안 지남
-            return [movie[0] for movie in movies if movie and movie[0].strip()]
-        else:
-            #3시간 지남
-            result = await bring_movie_name()  # 크롤링 하기
-            query.insert_movie(result)  # 그리고 인서트
-            return result
+        # if movies[0][1] >= datetime.now() - timedelta(hours=3):
+        #     # 3시간 안 지남
+        return [movie[0] for movie in movies if movie and movie[0].strip()]
+        # else:
+        #     # 3시간 지남
+        #     result = await bring_movie_name()  # 크롤링 하기
+        #     query.insert_movie(result)  # 그리고 인서트
+        #     return result
 
 
 @app.get("/review-watcha")
@@ -160,7 +160,7 @@ async def get_review(name: str):
     # review 테이블의 movie_code가 일치하는게 있는지 찾는다.
     reviews = query.get_review(name, 'watcha')
     if reviews:
-        #3 시간 확인
+        # 3 시간 확인
         if reviews[0][1] >= datetime.now() - timedelta(hours=3):
             # 안 지났으면?
             return [review[0] for review in reviews]
@@ -170,7 +170,7 @@ async def get_review(name: str):
             query.insert_review(result[name], name, 'watcha')
             return result[name]
     else:
-        #아예 처음
+        # 아예 처음
         result = await bring_review([name])
         query.insert_review(result[name], name, 'watcha')
         return result[name]
@@ -192,25 +192,81 @@ async def get_naver_review(name: str):
         return result
 
 
-@app.get("/asktogpt")
-async def getGptReview():
-    global review_list
-    client = OpenAI(api_key="")
+@app.get("/main/{movie_name}")
+async def root(movie_name: str):
+    def get_movie():
+        try:
+            r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located(
+                (By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[4]/div[4]/ul/li')))
+            return r
+        except Exception as e:
+            r = WebDriverWait(driver, 5).until(EC.presence_of_all_elements_located(
+                (By.XPATH, '//*[@id="main_pack"]/div[3]/div[2]/div/div/div[3]/div[4]/ul/li')))
+            print(f"페이지 로딩 또는 크롤링 실패: {e.__class__.__name__}")
+            return r
 
-    sliceReviews = ", ".join(review_list[:5])
-    completion = client.chat.completions.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a movie expert."},
-            {
-                "role": "user",
-                "content": f"해당 영화 리뷰들을 분석하고 요약을 3줄 이내로 작성해줘. {sliceReviews}"
-            }
-        ]
+    driver = webdriver.Chrome(service=service)
+    url = "https://search.naver.com/search.naver?where=nexearch&sm=top_hty&fbm=0&ie=utf8&query=" + movie_name + "+관람평"
+    driver.get(url)
+
+    # 데이터 크롤링
+    try:
+        reviews = get_movie()
+        review_list = []
+        for review in reviews:
+            try:
+                r = review.find_element(By.CLASS_NAME, "_text")
+                review_list.append(r.text)
+                print("-" * 40)
+            except Exception as e:
+                print(f"리뷰 처리 중 오류 발생: {e}")
+    except Exception as e:
+        print(f"페이지 로딩 또는 크롤링 실패: {e}")
+
+    finally:
+        driver.quit()
+
+    return review_list
+
+
+@app.get("/watcha/{movie_name}")
+async def getWatchaReview(movie_name: str):
+    driver = webdriver.Chrome(service=service)
+    url = "https://pedia.watcha.com/ko-KR"
+    driver.get(url)
+    review_list = []
+
+    e = driver.find_element(By.XPATH, '//*[@id="desktop-search-field"]')
+    e.send_keys(movie_name)
+    e.send_keys(Keys.RETURN)
+
+    WebDriverWait(driver, 10).until(
+        EC.element_to_be_clickable((By.XPATH,
+                                    '//*[@id="root"]/div[1]/section/section/div[2]/div[1]/section/section[2]/div[1]/ul/li[1]/a/div[1]/div[1]/img'))
     )
-    return completion.choices[0].message.content
+    a = driver.find_elements(By.XPATH,
+                             '//*[@id="root"]/div[1]/section/section/div[2]/div[1]/section/section[2]/div[1]/ul/li[1]/a/div[1]/div[1]/img')
+    a[0].click()
+
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located(
+            (By.XPATH, '//*[@id="root"]/div[1]/section/div/div[2]/section/section[2]/ul/li[1]'))
+    )
+    driver.find_element(By.XPATH,
+                        '//*[@id="root"]/div[1]/section/div/div[2]/section/section[2]/header/div/div/a').click()
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.CSS_SELECTOR, '.B79Ex5Ar'))
+    )
+
+    b = driver.find_elements(By.CSS_SELECTOR, '.B79Ex5Ar')
+
+    for i in b:
+        print(i.text)
+        review_list.append(i.text)
+    return review_list
 
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app)
